@@ -1,0 +1,362 @@
+<!DOCTYPE html><html lang="en"><head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<title>Open Sea — Realtime WebGPU Ocean</title>
+<meta name="description" content="A realtime procedural ocean. WebGPU · Three.js · TSL. No textures, only math."/>
+<style>
+  /* ---------- Fonts (Fontsource via jsDelivr, WOFF2) ---------- */
+  @font-face {
+    font-family: 'Geist Sans';
+    font-style: normal;
+    font-weight: 400;
+    font-display: swap;
+    src: url('https://cdn.jsdelivr.net/npm/@fontsource/geist-sans@5/files/geist-sans-latin-400-normal.woff2') format('woff2');
+  }
+  @font-face {
+    font-family: 'Geist Sans';
+    font-style: normal;
+    font-weight: 500;
+    font-display: swap;
+    src: url('https://cdn.jsdelivr.net/npm/@fontsource/geist-sans@5/files/geist-sans-latin-500-normal.woff2') format('woff2');
+  }
+  @font-face {
+    font-family: 'Geist Mono';
+    font-style: normal;
+    font-weight: 400;
+    font-display: swap;
+    src: url('https://cdn.jsdelivr.net/npm/@fontsource/geist-mono@5/files/geist-mono-latin-400-normal.woff2') format('woff2');
+  }
+
+  /* ---------- Base ---------- */
+  :root { --accent: #8fe9e4; }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body {
+    height: 100%;
+    overflow: hidden;
+    background: #05070a;
+    overscroll-behavior: none;
+  }
+  body {
+    font-family: 'Geist Sans', system-ui, -apple-system, sans-serif;
+    color: #ffffff;
+    -webkit-font-smoothing: antialiased;
+  }
+  canvas {
+    position: fixed;
+    inset: 0;
+    display: block;
+    touch-action: none;
+    z-index: 0;
+  }
+
+  /* ---------- Vignette (non-interactive) ---------- */
+  .vignette {
+    position: fixed;
+    inset: 0;
+    z-index: 2;
+    pointer-events: none;
+    background:
+      radial-gradient(ellipse 130% 95% at 50% 38%, transparent 52%, rgba(2, 4, 7, 0.55) 100%),
+      linear-gradient(to bottom, transparent 68%, rgba(2, 4, 7, 0.38) 100%);
+  }
+
+  /* ---------- UI overlay (hidden until first rendered frame) ---------- */
+  .ui {
+    position: fixed;
+    inset: 0;
+    z-index: 3;
+    pointer-events: none;      /* only the panel itself receives events */
+    opacity: 0;
+    transition: opacity 0.9s ease;
+  }
+  body.ready .ui { opacity: 1; }
+
+  .panel-shell {
+    position: absolute;
+    top: 24px;
+    left: 24px;
+    padding: 6px;
+    border-radius: 26px;
+    background: rgba(255, 255, 255, 0.045);
+    border: 1px solid rgba(255, 255, 255, 0.09);
+    pointer-events: auto;
+    opacity: 0;
+    transform: translateY(14px);
+    transition: transform 1s cubic-bezier(0.22, 1, 0.36, 1), opacity 1s ease;
+  }
+  body.ready .panel-shell { opacity: 1; transform: translateY(0); }
+
+  .panel {
+    width: 300px;
+    padding: 22px;
+    border-radius: 20px;
+    background: rgba(8, 11, 16, 0.55);
+    -webkit-backdrop-filter: blur(24px) saturate(140%);
+    backdrop-filter: blur(24px) saturate(140%);
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.07);
+  }
+
+  .eyebrow {
+    font-family: 'Geist Mono', ui-monospace, monospace;
+    font-size: 10px;
+    letter-spacing: 0.34em;
+    text-transform: uppercase;
+    color: rgba(255, 255, 255, 0.5);
+  }
+  .title {
+    margin-top: 7px;
+    font-size: 21px;
+    font-weight: 500;
+    letter-spacing: 0.04em;
+  }
+  .subtitle {
+    margin-top: 7px;
+    font-family: 'Geist Mono', ui-monospace, monospace;
+    font-size: 9px;
+    letter-spacing: 0.06em;
+    color: rgba(255, 255, 255, 0.38);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  /* ---------- Controls ---------- */
+  .control { margin-top: 22px; }
+  .control-head {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    font-family: 'Geist Mono', ui-monospace, monospace;
+    font-size: 10px;
+    letter-spacing: 0.24em;
+    text-transform: uppercase;
+    color: rgba(255, 255, 255, 0.6);
+  }
+  .control-head label { cursor: pointer; }
+  .control-value { color: var(--accent); letter-spacing: 0.14em; }
+
+  input[type="range"] {
+    -webkit-appearance: none;
+    appearance: none;
+    display: block;
+    width: 100%;
+    height: 22px;
+    margin-top: 8px;
+    background: transparent;
+    cursor: pointer;
+  }
+  input[type="range"]:focus { outline: none; }
+  input[type="range"]::-webkit-slider-runnable-track {
+    height: 3px;
+    border-radius: 2px;
+    background: rgba(255, 255, 255, 0.18);
+  }
+  input[type="range"]::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    appearance: none;
+    width: 12px;
+    height: 12px;
+    margin-top: -4.5px;         /* (track 3px - thumb 12px) / 2 */
+    border: none;
+    border-radius: 50%;
+    background: var(--accent);
+    box-shadow: 0 0 8px rgba(143, 233, 228, 0.85), 0 0 18px rgba(143, 233, 228, 0.35);
+    transition: transform 0.15s ease;
+  }
+  input[type="range"]::-webkit-slider-thumb:hover { transform: scale(1.25); }
+  input[type="range"]::-moz-range-track {
+    height: 3px;
+    border-radius: 2px;
+    background: rgba(255, 255, 255, 0.18);
+  }
+  input[type="range"]::-moz-range-thumb {
+    width: 12px;
+    height: 12px;
+    border: none;
+    border-radius: 50%;
+    background: var(--accent);
+    box-shadow: 0 0 8px rgba(143, 233, 228, 0.85), 0 0 18px rgba(143, 233, 228, 0.35);
+    transition: transform 0.15s ease;
+  }
+  input[type="range"]::-moz-range-thumb:hover { transform: scale(1.25); }
+
+  .panel-footer {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-top: 24px;
+    padding-top: 16px;
+    border-top: 1px solid rgba(255, 255, 255, 0.07);
+  }
+  .pill {
+    font-family: 'Geist Mono', ui-monospace, monospace;
+    font-size: 10px;
+    letter-spacing: 0.26em;
+    text-transform: uppercase;
+    padding: 8px 15px 8px 18px;
+    border-radius: 999px;
+    border: 1px solid rgba(255, 255, 255, 0.14);
+    background: transparent;
+    color: rgba(255, 255, 255, 0.42);
+    cursor: pointer;
+    transition: background 0.2s ease, border-color 0.2s ease, color 0.2s ease, transform 0.1s ease;
+  }
+  .pill:hover { color: rgba(255, 255, 255, 0.7); }
+  .pill:active { transform: scale(0.95); }
+  .pill.active {
+    background: rgba(143, 233, 228, 0.14);
+    border-color: rgba(143, 233, 228, 0.55);
+    color: #d9f7f4;
+  }
+  .pill.active:hover { color: #effffd; }
+  .fps {
+    font-family: 'Geist Mono', ui-monospace, monospace;
+    font-size: 10px;
+    letter-spacing: 0.2em;
+    color: rgba(255, 255, 255, 0.4);
+  }
+  .fps span { color: rgba(255, 255, 255, 0.88); }
+
+  /* ---------- Hint ---------- */
+  .hint {
+    position: absolute;
+    bottom: 22px;
+    left: 50%;
+    transform: translateX(-50%);
+    font-family: 'Geist Mono', ui-monospace, monospace;
+    font-size: 9px;
+    letter-spacing: 0.42em;
+    text-indent: 0.42em;        /* recenters text shifted by letter-spacing */
+    white-space: nowrap;
+    color: rgba(255, 255, 255, 0.32);
+  }
+
+  /* ---------- Loader / error screen ---------- */
+  .loader {
+    position: fixed;
+    inset: 0;
+    z-index: 10;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    background: #05070a;
+    transition: opacity 0.9s ease;
+  }
+  .loader.done { opacity: 0; pointer-events: none; }
+  .loader-title {
+    margin: 16px 0 34px;
+    font-size: 34px;
+    font-weight: 500;
+    letter-spacing: 0.5em;
+    text-indent: 0.5em;
+    text-align: center;
+  }
+  .loader-track {
+    width: 168px;
+    height: 2px;
+    border-radius: 1px;
+    background: rgba(255, 255, 255, 0.1);
+    overflow: hidden;
+  }
+  .loader-bar {
+    width: 56px;
+    height: 100%;
+    border-radius: 1px;
+    background: var(--accent);
+    box-shadow: 0 0 12px rgba(143, 233, 228, 0.9);
+    animation: scan 1.15s ease-in-out infinite;
+  }
+  @keyframes scan {
+    0%   { transform: translateX(-60px); }
+    100% { transform: translateX(172px); }
+  }
+  .loader-status {
+    margin-top: 20px;
+    font-family: 'Geist Mono', ui-monospace, monospace;
+    font-size: 9px;
+    letter-spacing: 0.3em;
+    text-indent: 0.3em;
+    color: rgba(255, 255, 255, 0.4);
+  }
+  .loader-message {
+    display: none;
+    max-width: 440px;
+    margin-top: 6px;
+    padding: 0 24px;
+    text-align: center;
+    font-size: 12.5px;
+    line-height: 1.75;
+    color: rgba(255, 255, 255, 0.55);
+  }
+  .loader.error .loader-title { color: #ff9d7a; font-size: 24px; letter-spacing: 0.32em; text-indent: 0.32em; }
+  .loader.error .loader-track { display: none; }
+  .loader.error .loader-status { display: none; }
+  .loader.error .loader-message { display: block; }
+
+  /* ---------- Responsive ---------- */
+  @media (max-width: 768px) {
+    .panel-shell { top: 14px; left: 14px; right: 14px; }
+    .panel { width: auto; }
+    .subtitle { font-size: 8.5px; letter-spacing: 0.04em; white-space: normal; }
+    .hint { display: none; }
+  }
+</style>
+<script type="importmap">
+{
+  "imports": {
+    "three": "https://cdn.jsdelivr.net/npm/three@0.178.0/build/three.webgpu.js",
+    "three/webgpu": "https://cdn.jsdelivr.net/npm/three@0.178.0/build/three.webgpu.js",
+    "three/tsl": "https://cdn.jsdelivr.net/npm/three@0.178.0/build/three.tsl.js",
+    "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.178.0/examples/jsm/"
+  }
+}
+</script>
+</head>
+<body>
+  <div class="vignette" aria-hidden="true"></div>
+
+  <div class="ui">
+    <div class="panel-shell">
+      <section class="panel" aria-label="Ocean controls">
+        <div class="eyebrow">Realtime Ocean</div>
+        <h1 class="title">OPEN SEA</h1>
+        <p class="subtitle">Gerstner swell · FBM micro-surface · spectral sky</p>
+
+        <div class="control">
+          <div class="control-head">
+            <label for="sea-range">Sea State</label>
+            <span class="control-value" id="sea-value">0.93</span>
+          </div>
+          <input id="sea-range" type="range" min="0" max="100" value="45" step="1" aria-label="Sea state"/>
+        </div>
+
+        <div class="control">
+          <div class="control-head">
+            <label for="time-range">Time of Day</label>
+            <span class="control-value" id="time-value">AFTERNOON</span>
+          </div>
+          <input id="time-range" type="range" min="0" max="100" value="55" step="1" aria-label="Time of day"/>
+        </div>
+
+        <div class="panel-footer">
+          <button id="drift-button" class="pill active" type="button" aria-pressed="true">Drift</button>
+          <div class="fps"><span id="fps-value">––</span> FPS</div>
+        </div>
+      </section>
+    </div>
+    <div class="hint" aria-hidden="true">DRAG TO ORBIT — SCROLL TO ZOOM</div>
+  </div>
+
+  <div class="loader" id="loader" role="status">
+    <div class="eyebrow">WebGPU · Three.js · TSL</div>
+    <div class="loader-title" id="loader-title">OPEN SEA</div>
+    <div class="loader-track"><div class="loader-bar"></div></div>
+    <div class="loader-status" id="loader-status">INITIALIZING RENDERER…</div>
+    <p class="loader-message" id="loader-message"></p>
+  </div>
+
+  <script type="module" src="./main.js"></script>
+
+
+</body></html>
