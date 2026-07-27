@@ -7,6 +7,7 @@
 
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { bloom } from 'three/addons/tsl/display/BloomNode.js';
 import {
   Fn, pass, uniform, float, vec2, vec3, vec4,
@@ -26,6 +27,7 @@ const uHorizonColor = uniform(new THREE.Color(0.52, 0.68, 0.82));
 const uZenithColor = uniform(new THREE.Color(0.07, 0.2, 0.42));
 const uDeepColor = uniform(new THREE.Color(0.015, 0.09, 0.11));
 const uShallowColor = uniform(new THREE.Color(0.06, 0.32, 0.36));
+const uWaterOpacity = uniform(0.75); // ocean transparency → underwater silhouettes (lower = more visible)
 
 /* ---------------------------------------------------------------------------
    Waves — five directional Gerstner components, constants precomputed on CPU
@@ -217,6 +219,8 @@ const oceanColor = Fn(() => {
    Scene setup — renderer, camera, meshes, post-processing
    --------------------------------------------------------------------------- */
 let renderer, scene, camera, controls, postProcessing;
+let creatureGroup, creatures = [], wildlifeVisible = true, sunLight, hemiLight;
+const HEADING_OFFSET = 0; // assumed model forward = +Z; set to Math.PI/2 if model faces +X
 
 function setupScene() {
   renderer = new THREE.WebGPURenderer({ antialias: true, powerPreference: 'high-performance' });
@@ -238,8 +242,12 @@ function setupScene() {
   const oceanMaterial = new THREE.MeshBasicNodeMaterial();
   oceanMaterial.positionNode = wavePosition(positionLocal.xz, uTime, uSea);
   oceanMaterial.colorNode = oceanColor();
+  oceanMaterial.transparent = true;            // light transparency → underwater silhouettes
+  oceanMaterial.opacityNode = uWaterOpacity;
+  oceanMaterial.depthWrite = false;           // never occlude creatures beneath the surface
   const ocean = new THREE.Mesh(oceanGeometry, oceanMaterial);
   ocean.frustumCulled = false; // vertex displacement must never cull the mesh
+  ocean.renderOrder = 1;        // draw after (opaque) creatures so they show through
   scene.add(ocean);
 
   // sky dome
@@ -252,6 +260,16 @@ function setupScene() {
   sky.renderOrder = -1;
   sky.frustumCulled = false;
   scene.add(sky);
+
+  // creature group — populated asynchronously by setupCreatures()
+  creatureGroup = new THREE.Group();
+  scene.add(creatureGroup);
+
+  // lighting for the marine-life models (ocean + sky use unlit MeshBasicNodeMaterial)
+  sunLight = new THREE.DirectionalLight(0xffffff, 1.6);
+  scene.add(sunLight);
+  hemiLight = new THREE.HemisphereLight(0x9fc6ff, 0x05202a, 0.6);
+  scene.add(hemiLight);
 
   // post-processing: scene pass + TSL bloom
   postProcessing = new THREE.PostProcessing(renderer);
@@ -324,7 +342,103 @@ function applyTimeOfDay(t) {
   const intensity = THREE.MathUtils.lerp(DUSK.intensity, DAY.intensity, w);
   uSunColor.value.copy(DUSK.sun).lerp(DAY.sun, w).multiplyScalar(intensity);
 
+  // drive the marine-life lights from the same time-of-day state
+  if (sunLight) {
+    sunLight.position.copy(uSunDir.value).multiplyScalar(120);
+    sunLight.color.copy(uSunColor.value);
+    sunLight.intensity = THREE.MathUtils.lerp(1.0, 1.9, w);
+  }
+  if (hemiLight) {
+    hemiLight.color.copy(uHorizonColor.value);
+    hemiLight.groundColor.copy(uDeepColor.value);
+    hemiLight.intensity = THREE.MathUtils.lerp(0.35, 0.7, w);
+  }
+
   timeValueEl.textContent = timeLabel(t);
+}
+
+/* ---------------------------------------------------------------------------
+   Marine life — CC0 whale + shark (Quaternius, via get3dmodels).
+   Loaded with GLTFLoader. The whale breaches on a hand-authored arc; the
+   shark patrols and plays its built-in swim clip via AnimationMixer. Both are
+   lit by the engine lights declared in setupScene. (No custom shaders.)
+   --------------------------------------------------------------------------- */
+const CREATURE_CFG = {
+  whale: { radius: 46, speed: 0.045, baseY: -1.2, bobFreq: 0.5, bobAmp: 0.6, breach: true,  targetLen: 14 },
+  shark: { radius: 28, speed: 0.09,  baseY: -0.5, bobFreq: 0.7, bobAmp: 0.25, breach: false, targetLen: 7  }
+};
+
+function addCreature(gltf, cfg) {
+  const model = gltf.scene;
+  model.updateMatrixWorld(true);
+  const box = new THREE.Box3().setFromObject(model);
+  const size = new THREE.Vector3(); box.getSize(size);
+  const center = new THREE.Vector3(); box.getCenter(center);
+  const maxDim = Math.max(size.x, size.y, size.z) || 1;
+  const s = cfg.targetLen / maxDim;        // auto-fit so scale is model-independent
+  model.scale.setScalar(s);
+
+  // Align the body's longest axis to the root's +Z "forward" so heading works
+  // for any source model without a manual offset. (Front/back stays a tunable.)
+  if (size.x >= size.z && size.x >= size.y) model.rotation.y = -Math.PI / 2; // +X → +Z
+  else if (size.y >= size.x && size.y >= size.z) model.rotation.x = Math.PI / 2; // +Y → +Z
+
+  const root = new THREE.Group();
+  root.add(model);
+  model.position.copy(center).multiplyScalar(-s); // recenter pivot at bbox center
+  creatureGroup.add(root);
+
+  const c = {
+    root, type: cfg.type, radius: cfg.radius, speed: cfg.speed,
+    baseY: cfg.baseY, bobFreq: cfg.bobFreq, bobAmp: cfg.bobAmp,
+    breach: cfg.breach, angle: Math.random() * Math.PI * 2,
+    phase: Math.random() * Math.PI * 2, mixer: null
+  };
+
+  if (gltf.animations && gltf.animations.length) {
+    const mixer = new THREE.AnimationMixer(model);
+    const clip = gltf.animations.find(a => /swim/i.test(a.name)) || gltf.animations[0];
+    mixer.clipAction(clip).play();
+    c.mixer = mixer;
+  }
+  creatures.push(c);
+}
+
+async function setupCreatures() {
+  const loader = new GLTFLoader();
+  try {
+    const g = await loader.loadAsync('./assets/whale.glb');
+    addCreature(g, { type: 'whale', ...CREATURE_CFG.whale });
+  } catch (e) { console.error('[open-sea] whale failed to load:', e); }
+  try {
+    const g = await loader.loadAsync('./assets/shark.glb');
+    addCreature(g, { type: 'shark', ...CREATURE_CFG.shark });
+  } catch (e) { console.error('[open-sea] shark failed to load:', e); }
+}
+
+function updateCreatures(time, dt) {
+  creatureGroup.visible = wildlifeVisible;
+  for (const c of creatures) {
+    c.angle += c.speed * dt;
+    const r = c.radius;
+    const x = Math.cos(c.angle) * r;
+    const z = Math.sin(c.angle) * r;
+    let y = c.baseY + Math.sin(time * c.bobFreq + c.phase) * c.bobAmp;
+    let pitch = 0;
+    if (c.breach) {
+      const cycle = ((time * 0.07 + c.phase) % 1 + 1) % 1; // ~14s breach period
+      if (cycle < 0.25) {
+        const arc = Math.sin((cycle / 0.25) * Math.PI);    // 0→1→0 lift
+        y += arc * 8.0;
+        pitch = -arc * 0.7;                                // nose-up during breach
+      }
+    }
+    c.root.position.set(x, y, z);
+    const tx = -Math.sin(c.angle), tz = Math.cos(c.angle); // travel tangent
+    const heading = Math.atan2(tx, tz) + HEADING_OFFSET;
+    c.root.rotation.set(pitch, heading, 0);
+    if (c.mixer) c.mixer.update(dt);
+  }
 }
 
 /* ---------------------------------------------------------------------------
@@ -339,6 +453,7 @@ const seaValueEl = document.getElementById('sea-value');
 const timeRangeEl = document.getElementById('time-range');
 const timeValueEl = document.getElementById('time-value');
 const driftButtonEl = document.getElementById('drift-button');
+const wildlifeButtonEl = document.getElementById('wildlife-button');
 const fpsValueEl = document.getElementById('fps-value');
 
 function setupUI() {
@@ -356,6 +471,12 @@ function setupUI() {
     controls.autoRotate = !controls.autoRotate;
     driftButtonEl.classList.toggle('active', controls.autoRotate);
     driftButtonEl.setAttribute('aria-pressed', String(controls.autoRotate));
+  });
+
+  wildlifeButtonEl.addEventListener('click', () => {
+    wildlifeVisible = !wildlifeVisible;
+    wildlifeButtonEl.classList.toggle('active', wildlifeVisible);
+    wildlifeButtonEl.setAttribute('aria-pressed', String(wildlifeVisible));
   });
 }
 
@@ -385,6 +506,8 @@ async function frame() {
   const rawDt = (now - lastNow) / 1000;
   lastNow = now;
   uTime.value += Math.min(rawDt, 0.1); // clamp: no shader-time jumps after a stall
+
+  updateCreatures(uTime.value, Math.min(rawDt, 0.1));
 
   controls.update();
   await postProcessing.renderAsync();
@@ -435,6 +558,7 @@ async function init() {
     setupControls();
     setupUI();
     setupLifecycle();
+    setupCreatures(); // async; creatures pop in once models load, ocean renders immediately
     await renderer.init();
     lastNow = performance.now();
     renderer.setAnimationLoop(frame);
