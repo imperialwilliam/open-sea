@@ -2,7 +2,7 @@
    OPEN SEA — realtime procedural ocean
    WebGPURenderer + Three.js TSL node shaders. No textures, no build step.
    Sections: uniforms · waves · noise · sky · ocean · scene · controls ·
-             time of day · UI · animation · init
+             time of day · creatures · UI · animation · init
    ============================================================================ */
 
 import * as THREE from 'three';
@@ -27,7 +27,7 @@ const uHorizonColor = uniform(new THREE.Color(0.52, 0.68, 0.82));
 const uZenithColor = uniform(new THREE.Color(0.07, 0.2, 0.42));
 const uDeepColor = uniform(new THREE.Color(0.015, 0.09, 0.11));
 const uShallowColor = uniform(new THREE.Color(0.06, 0.32, 0.36));
-const uWaterOpacity = uniform(0.75); // ocean transparency → underwater silhouettes (lower = more visible)
+const uWaterOpacity = uniform(0.72); // slightly more opaque — better visual balance
 
 /* ---------------------------------------------------------------------------
    Waves — five directional Gerstner components, constants precomputed on CPU
@@ -220,18 +220,18 @@ const oceanColor = Fn(() => {
    --------------------------------------------------------------------------- */
 let renderer, scene, camera, controls, postProcessing;
 let creatureGroup, creatures = [], wildlifeVisible = true, sunLight, hemiLight;
-const HEADING_OFFSET = 0; // assumed model forward = +Z; set to Math.PI/2 if model faces +X
+const HEADING_OFFSET = 0; // assumed model forward = +Z
 
 function setupScene() {
   renderer = new THREE.WebGPURenderer({ antialias: true, powerPreference: 'high-performance' });
   renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
   renderer.setSize(window.innerWidth, window.innerHeight);
   renderer.toneMapping = THREE.ACESFilmicToneMapping;
-  renderer.toneMappingExposure = 1.0;
+  renderer.toneMappingExposure = 1.05;     // slightly brighter — helps creature visibility
   document.body.appendChild(renderer.domElement);
 
   scene = new THREE.Scene();
-  scene.background = new THREE.Color('#05070a'); // safe init color
+  scene.background = new THREE.Color('#05070a');
 
   camera = new THREE.PerspectiveCamera(55, window.innerWidth / window.innerHeight, 0.5, 8000);
   camera.position.set(0, 5.5, 17);
@@ -242,12 +242,12 @@ function setupScene() {
   const oceanMaterial = new THREE.MeshBasicNodeMaterial();
   oceanMaterial.positionNode = wavePosition(positionLocal.xz, uTime, uSea);
   oceanMaterial.colorNode = oceanColor();
-  oceanMaterial.transparent = true;            // light transparency → underwater silhouettes
+  oceanMaterial.transparent = true;
   oceanMaterial.opacityNode = uWaterOpacity;
-  oceanMaterial.depthWrite = false;           // never occlude creatures beneath the surface
+  oceanMaterial.depthWrite = false;
   const ocean = new THREE.Mesh(oceanGeometry, oceanMaterial);
-  ocean.frustumCulled = false; // vertex displacement must never cull the mesh
-  ocean.renderOrder = 1;        // draw after (opaque) creatures so they show through
+  ocean.frustumCulled = false;
+  ocean.renderOrder = 1;
   scene.add(ocean);
 
   // sky dome
@@ -265,10 +265,11 @@ function setupScene() {
   creatureGroup = new THREE.Group();
   scene.add(creatureGroup);
 
-  // lighting for the marine-life models (ocean + sky use unlit MeshBasicNodeMaterial)
-  sunLight = new THREE.DirectionalLight(0xffffff, 1.6);
+  // ── Lighting for marine-life models (boosted for WebGPU PBR visibility) ──
+  // glTF MeshStandardMaterial needs strong key + fill lights to not render black
+  sunLight = new THREE.DirectionalLight(0xffffff, 2.8);
   scene.add(sunLight);
-  hemiLight = new THREE.HemisphereLight(0x9fc6ff, 0x05202a, 0.6);
+  hemiLight = new THREE.HemisphereLight(0x9fc6ff, 0x05202a, 1.0);
   scene.add(hemiLight);
 
   // post-processing: scene pass + TSL bloom
@@ -288,7 +289,7 @@ function setupControls() {
   controls.minDistance = 4;
   controls.maxDistance = 120;
   controls.minPolarAngle = 0.15;
-  controls.maxPolarAngle = Math.PI * 0.495; // camera can never dip below the surface
+  controls.maxPolarAngle = Math.PI * 0.495;
   controls.target.set(0, 1.5, 0);
   controls.autoRotate = true;
   controls.autoRotateSpeed = 0.25;
@@ -296,7 +297,7 @@ function setupControls() {
 }
 
 /* ---------------------------------------------------------------------------
-   Time of day — DUSK ↔ DAY palette interpolation driven by one slider
+   Time of day — DUSK <-> DAY palette interpolation driven by one slider
    --------------------------------------------------------------------------- */
 const DAY = {
   zenith: new THREE.Color(0.07, 0.20, 0.42),
@@ -331,7 +332,6 @@ function applyTimeOfDay(t) {
     -Math.cos(elevation) * Math.cos(azimuth)
   );
 
-  // daylight weight: cubic smoothstep of elevation from 0 → 0.42
   const x = THREE.MathUtils.clamp(elevation / 0.42, 0, 1);
   const w = x * x * (3 - 2 * x);
 
@@ -342,59 +342,135 @@ function applyTimeOfDay(t) {
   const intensity = THREE.MathUtils.lerp(DUSK.intensity, DAY.intensity, w);
   uSunColor.value.copy(DUSK.sun).lerp(DAY.sun, w).multiplyScalar(intensity);
 
-  // drive the marine-life lights from the same time-of-day state
+  // drive marine-life lights from the same time-of-day state (brighter range)
   if (sunLight) {
     sunLight.position.copy(uSunDir.value).multiplyScalar(120);
-    sunLight.color.copy(uSunColor.value);
-    sunLight.intensity = THREE.MathUtils.lerp(1.0, 1.9, w);
+    // Decouple: color = pure sun hue (no intensity), intensity = separate scalar
+    const sunHue = DUSK.sun.clone().lerp(DAY.sun, w).normalize();
+    sunLight.color.copy(sunHue);
+    sunLight.intensity = THREE.MathUtils.lerp(1.8, 2.8, w);  // was 1.0-1.9
   }
   if (hemiLight) {
     hemiLight.color.copy(uHorizonColor.value);
     hemiLight.groundColor.copy(uDeepColor.value);
-    hemiLight.intensity = THREE.MathUtils.lerp(0.35, 0.7, w);
+    hemiLight.intensity = THREE.MathUtils.lerp(0.6, 1.2, w);  // was 0.35-0.7
   }
 
   timeValueEl.textContent = timeLabel(t);
 }
 
-/* ---------------------------------------------------------------------------
-   Marine life — CC0 whale + shark (Quaternius, via get3dmodels).
-   Loaded with GLTFLoader. The whale breaches on a hand-authored arc; the
-   shark patrols and plays its built-in swim clip via AnimationMixer. Both are
-   lit by the engine lights declared in setupScene. (No custom shaders.)
-   --------------------------------------------------------------------------- */
+/* ===========================================================================
+   MARINE LIFE — CC0 whale + shark with materials, realistic scale,
+   wave-surface riding, smooth breach animation, and banking turns.
+   =========================================================================== */
+
+// ── Species configs (real-world-inspired proportions & behaviour) ──
+// Finback whale ~20m → targetLen 18 | Great white shark ~5m → targetLen 3.5
+// Ratio ≈ 5:1 (previously 2:1 — shark was half the whale's size, wrong).
 const CREATURE_CFG = {
-  whale: { radius: 46, speed: 0.045, baseY: -1.2, bobFreq: 0.5, bobAmp: 0.6, breach: true,  targetLen: 14 },
-  shark: { radius: 28, speed: 0.09,  baseY: -0.5, bobFreq: 0.7, bobAmp: 0.25, breach: false, targetLen: 7  }
+  whale: {
+    radius: 60, speed: 0.028, baseY: -0.8,
+    bobFreq: [0.37, 0.61], bobAmp: [0.35, 0.18],
+    breach: true, targetLen: 18,
+    breachPeriod: 16, breachRiseFrac: 0.30, breachPeakFrac: 0.12,
+    breachHeight: 10.0, breachPitch: 0.65,
+    color: new THREE.Color(0x1a252e), roughness: 0.78, metalness: 0.06,
+    bankAngle: 0.08
+  },
+  shark: {
+    radius: 30, speed: 0.07, baseY: -1.4,
+    bobFreq: [0.55, 0.91], bobAmp: [0.18, 0.09],
+    breach: false, targetLen: 3.5,
+    finBreak: true, finBreakAmp: 0.7, finBreakPeriod: 7,
+    color: new THREE.Color(0x2e2e2e), roughness: 0.62, metalness: 0.10,
+    bankAngle: 0.20
+  }
 };
 
+// ── Material post-processing ──
+// glTF MeshStandardMaterial renders black in WebGPU when lights are weak or
+// material properties are extreme. We force sane PBR values + tiny emissive floor.
+function applyCreatureMaterial(mesh, cfg) {
+  if (!mesh.isMesh) return;
+  const mats = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
+  for (let mat of mats) {
+    if (!mat) { mat = new THREE.MeshStandardMaterial(); }
+    mat.color.copy(cfg.color);
+    mat.roughness = Math.min(Math.max(cfg.roughness, 0.01), 1.0);
+    mat.metalness = Math.min(Math.max(cfg.metalness, 0.0), 1.0);
+    mat.emissive = cfg.color.clone().multiplyScalar(0.025);
+    mat.emissiveIntensity = 1.0;
+    mat.envMapIntensity = 0.6;
+    mat.needsUpdate = true;
+  }
+  if (Array.isArray(mesh.material)) return;
+  mesh.material = mats[0]; // reassign in case we replaced it
+}
+
+// ── Easing helpers ──
+function easeOutCubic(t) { return 1 - Math.pow(1 - t, 3); }
+function easeInCubic(t)  { return t * t * t; }
+
+// ── Wave height sampler (JS mirror of TSL Gerstner waves) ──
+// Returns approximate wave Y at (x, z, time). Close enough for creature riding.
+const _WAVE_AMP = [0.12/0.105, 0.12/0.203, 0.09/0.349, 0.07/0.661, 0.05/1.257];
+const _WAVE_K   = [0.105, 0.203, 0.349, 0.661, 1.257];
+const _WAVE_C   = [1.013, 1.409, 1.850, 2.546, 3.509]; // = sqrt(9.8 * k), matches TSL WAVES[].c
+const _WAVE_DIR = [[1,0],[0.6,0.8],[-0.7,0.7],[0.3,-0.95],[-0.35,-0.94]];
+
+function sampleWaveY(x, z, time) {
+  let y = 0;
+  const sv = uSea.value;
+  for (let i = 0; i < 5; i++) {
+    const d = _WAVE_DIR[i], len = Math.hypot(d[0], d[1]);
+    const f = _WAVE_K[i] * (d[0]/len*x + d[1]/len*z - time*_WAVE_C[i]);
+    y += (_WAVE_AMP[i] * sv) * Math.sin(f);
+  }
+  return y;
+}
+
+// ── Creature factory ──
 function addCreature(gltf, cfg) {
   const model = gltf.scene;
+
+  // Apply materials to all meshes BEFORE scene graph manipulation
+  model.traverse((child) => { applyCreatureMaterial(child, cfg); });
+
   model.updateMatrixWorld(true);
   const box = new THREE.Box3().setFromObject(model);
   const size = new THREE.Vector3(); box.getSize(size);
   const center = new THREE.Vector3(); box.getCenter(center);
   const maxDim = Math.max(size.x, size.y, size.z) || 1;
-  const s = cfg.targetLen / maxDim;        // auto-fit so scale is model-independent
+  const s = cfg.targetLen / maxDim;
   model.scale.setScalar(s);
 
-  // Align the body's longest axis to the root's +Z "forward" so heading works
-  // for any source model without a manual offset. (Front/back stays a tunable.)
-  if (size.x >= size.z && size.x >= size.y) model.rotation.y = -Math.PI / 2; // +X → +Z
-  else if (size.y >= size.x && size.y >= size.z) model.rotation.x = Math.PI / 2; // +Y → +Z
+  // Align longest body axis to root-group +Z ("forward")
+  if (size.x >= size.z && size.x >= size.y) model.rotation.y = -Math.PI / 2;
+  else if (size.y >= size.x && size.y >= size.z) model.rotation.x = Math.PI / 2;
+
+  // Recenter AFTER rotation so the pivot aligns with the oriented bounding box
+  model.updateMatrixWorld(true);
+  const box2 = new THREE.Box3().setFromObject(model);
+  const center2 = new THREE.Vector3(); box2.getCenter(center2);
 
   const root = new THREE.Group();
   root.add(model);
-  model.position.copy(center).multiplyScalar(-s); // recenter pivot at bbox center
+  model.position.copy(center2).negate(); // recenter: place bbox center at root origin
   creatureGroup.add(root);
 
   const c = {
     root, type: cfg.type, radius: cfg.radius, speed: cfg.speed,
     baseY: cfg.baseY, bobFreq: cfg.bobFreq, bobAmp: cfg.bobAmp,
-    breach: cfg.breach, angle: Math.random() * Math.PI * 2,
-    phase: Math.random() * Math.PI * 2, mixer: null
+    breach: cfg.breach, breachPeriod: cfg.breachPeriod||0,
+    breachRiseFrac: cfg.breachRiseFrac||0, breachPeakFrac: cfg.breachPeakFrac||0,
+    breachHeight: cfg.breachHeight||0, breachPitch: cfg.breachPitch||0,
+    finBreak: cfg.finBreak||false, finBreakAmp: cfg.finBreakAmp||0,
+    finBreakPeriod: cfg.finBreakPeriod||0, bankAngle: cfg.bankAngle||0,
+    angle: Math.random() * Math.PI * 2, phase: Math.random() * Math.PI * 2,
+    mixer: null
   };
 
+  // Set up AnimationMixer for models with built-in clips (shark)
   if (gltf.animations && gltf.animations.length) {
     const mixer = new THREE.AnimationMixer(model);
     const clip = gltf.animations.find(a => /swim/i.test(a.name)) || gltf.animations[0];
@@ -406,37 +482,76 @@ function addCreature(gltf, cfg) {
 
 async function setupCreatures() {
   const loader = new GLTFLoader();
-  try {
-    const g = await loader.loadAsync('./assets/whale.glb');
-    addCreature(g, { type: 'whale', ...CREATURE_CFG.whale });
-  } catch (e) { console.error('[open-sea] whale failed to load:', e); }
-  try {
-    const g = await loader.loadAsync('./assets/shark.glb');
-    addCreature(g, { type: 'shark', ...CREATURE_CFG.shark });
-  } catch (e) { console.error('[open-sea] shark failed to load:', e); }
+  try { addCreature(await loader.loadAsync('./assets/whale.glb'), { type:'whale', ...CREATURE_CFG.whale }); }
+  catch (e) { console.error('[open-sea] whale failed:', e); }
+  try { addCreature(await loader.loadAsync('./assets/shark.glb'), { type:'shark', ...CREATURE_CFG.shark }); }
+  catch (e) { console.error('[open-sea] shark failed:', e); }
 }
 
+// ── Per-frame creature update ──
 function updateCreatures(time, dt) {
   creatureGroup.visible = wildlifeVisible;
+  if (!wildlifeVisible) return;
+
   for (const c of creatures) {
+    // Advance patrol angle
     c.angle += c.speed * dt;
     const r = c.radius;
     const x = Math.cos(c.angle) * r;
     const z = Math.sin(c.angle) * r;
-    let y = c.baseY + Math.sin(time * c.bobFreq + c.phase) * c.bobAmp;
-    let pitch = 0;
+
+    // Sample ocean wave height at this position → creature rides the surface
+    const waveY = sampleWaveY(x, z, time);
+
+    // Multi-frequency organic undulation (sum of 2 sine waves at different rates)
+    const bob1 = Math.sin(time * c.bobFreq[0] + c.phase) * c.bobAmp[0];
+    const bob2 = Math.sin(time * c.bobFreq[1] + c.phase * 1.7) * c.bobAmp[1];
+    let y = c.baseY + waveY + bob1 + bob2;
+    let pitch = 0, roll = 0;
+
+    // ── Whale breach: smooth eased arc (slow rise → peak hang → fast fall) ──
     if (c.breach) {
-      const cycle = ((time * 0.07 + c.phase) % 1 + 1) % 1; // ~14s breach period
-      if (cycle < 0.25) {
-        const arc = Math.sin((cycle / 0.25) * Math.PI);    // 0→1→0 lift
-        y += arc * 8.0;
-        pitch = -arc * 0.7;                                // nose-up during breach
+      const P = c.breachPeriod;
+      const cycle = (((time / P) + (c.phase / (Math.PI * 2))) % 1 + 1) % 1;
+      if (cycle < c.breachRiseFrac) {
+        // Slow ascent (ease-out cubic)
+        const t = cycle / c.breachRiseFrac, arc = easeOutCubic(t);
+        y += arc * c.breachHeight;
+        pitch = -arc * c.breachPitch;
+      } else if (cycle < c.breachRiseFrac + c.breachPeakFrac) {
+        // Peak hang — nearly full height, slight forward-tilt decay
+        const pt = (cycle - c.breachRiseFrac) / c.breachPeakFrac;
+        const arc = 1.0 - ((pt * pt * (3 - 2 * pt))) * 0.08;  // smoothstep settle
+        y += arc * c.breachHeight;
+        pitch = -(1.0 - pt * 0.3) * c.breachPitch;
+      } else {
+        // Fast fall + submerged recovery (ease-in cubic, continuous from peak)
+        const ft = (cycle - c.breachRiseFrac - c.breachPeakFrac) / (1 - c.breachRiseFrac - c.breachPeakFrac);
+        const arc = 1.0 - easeInCubic(ft);  // starts at 1.0, decays smoothly to 0
+        y += arc * c.breachHeight * Math.max(0, 1 - ft * 1.2);
+        // Pitch transitions smoothly: nose-up at peak → level → slight nose-down
+        pitch = (1 - ft) * -c.breachPitch * 0.4;  // continuous from peak pitch
       }
     }
+
+    // ── Shark dorsal-fin surface break ──
+    if (c.finBreak) {
+      const fc = (((time / c.finBreakPeriod) + c.phase) % 1 + 1) % 1;
+      if (fc < 0.15) {
+        // Brief moment where dorsal fin breaks surface
+        y += Math.sin((fc / 0.15) * Math.PI) * c.finBreakAmp;
+      }
+    }
+
+    // Banking into turns (roll = Z-axis rotation)
+    roll = Math.sin(time * 0.13 + c.phase * 2.0) * c.bankAngle;
+
+    // Apply transform
     c.root.position.set(x, y, z);
-    const tx = -Math.sin(c.angle), tz = Math.cos(c.angle); // travel tangent
-    const heading = Math.atan2(tx, tz) + HEADING_OFFSET;
-    c.root.rotation.set(pitch, heading, 0);
+    const tx = -Math.sin(c.angle), tz = Math.cos(c.angle);
+    c.root.rotation.set(pitch, Math.atan2(tx, tz) + HEADING_OFFSET, roll);
+
+    // Advance animation mixer
     if (c.mixer) c.mixer.update(dt);
   }
 }
@@ -505,7 +620,7 @@ async function frame() {
   const now = performance.now();
   const rawDt = (now - lastNow) / 1000;
   lastNow = now;
-  uTime.value += Math.min(rawDt, 0.1); // clamp: no shader-time jumps after a stall
+  uTime.value += Math.min(rawDt, 0.1);
 
   updateCreatures(uTime.value, Math.min(rawDt, 0.1));
 
@@ -535,7 +650,7 @@ function setupLifecycle() {
     if (document.hidden) {
       renderer.setAnimationLoop(null);
     } else {
-      lastNow = performance.now(); // reset so shader time never jumps
+      lastNow = performance.now();
       renderer.setAnimationLoop(frame);
     }
   });
@@ -558,7 +673,7 @@ async function init() {
     setupControls();
     setupUI();
     setupLifecycle();
-    setupCreatures(); // async; creatures pop in once models load, ocean renders immediately
+    setupCreatures(); // async; creatures pop in once models load
     await renderer.init();
     lastNow = performance.now();
     renderer.setAnimationLoop(frame);
