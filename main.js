@@ -346,7 +346,9 @@ function applyTimeOfDay(t) {
   if (sunLight) {
     sunLight.position.copy(uSunDir.value).multiplyScalar(120);
     // Decouple: color = pure sun hue (no intensity), intensity = separate scalar
-    const sunHue = DUSK.sun.clone().lerp(DAY.sun, w).normalize();
+    const sunHue = DUSK.sun.clone().lerp(DAY.sun, w);
+    const hLen = Math.sqrt(sunHue.r * sunHue.r + sunHue.g * sunHue.g + sunHue.b * sunHue.b);
+    if (hLen > 1e-6) { sunHue.r /= hLen; sunHue.g /= hLen; sunHue.b /= hLen; }
     sunLight.color.copy(sunHue);
     sunLight.intensity = THREE.MathUtils.lerp(1.8, 2.8, w);  // was 1.0-1.9
   }
