@@ -227,11 +227,51 @@ function setupScene() {
   renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
   renderer.setSize(window.innerWidth, window.innerHeight);
   renderer.toneMapping = THREE.ACESFilmicToneMapping;
-  renderer.toneMappingExposure = 1.05;     // slightly brighter — helps creature visibility
+  renderer.toneMappingExposure = 1.1;
+  renderer.outputColorSpace = THREE.SRGBColorSpace;   // critical for PBR materials
   document.body.appendChild(renderer.domElement);
 
   scene = new THREE.Scene();
   scene.background = new THREE.Color('#05070a');
+
+  // ── Procedural environment map (no external files needed) ──
+  // PBR MeshStandardMaterial renders pure black without scene.environment.
+  // We generate a soft sky gradient equirectangular texture via canvas.
+  const envSize = 256;
+  const envCanvas = document.createElement('canvas');
+  envCanvas.width = envSize * 2;
+  envCanvas.height = envSize;
+  const ctx = envCanvas.getContext('2d');
+  // vertical gradient: horizon warm → zenith cool blue
+  const gradV = ctx.createLinearGradient(0, 0, 0, envSize);
+  gradV.addColorStop(0.0, '#1a3050');    // zenith: deep blue
+  gradV.addColorStop(0.4, '#4a7090');     // upper sky
+  gradV.addColorStop(0.55, '#8ab4c8');    // horizon
+  gradV.addColorStop(0.65, '#c8a070');    // warm horizon glow
+  gradV.addColorStop(0.8, '#3a5060');     // below horizon fade
+  gradV.addColorStop(1.0, '#0a1520');     // ground: dark
+  ctx.fillStyle = gradV;
+  ctx.fillRect(0, 0, envCanvas.width, envCanvas.height);
+  // subtle horizontal brightness variation (sun side)
+  for (let y = 0; y < envSize; y++) {
+    const t = y / envSize;
+    const bright = Math.exp(-Math.pow((t - 0.58) * 3, 2)) * 25;
+    if (bright > 0.5) {
+      const imgData = ctx.getImageData(0, y, envCanvas.width, 1);
+      for (let x = 0; x < imgData.data.length; x += 4) {
+        const hx = x / 4 / envCanvas.width;
+        const sunGlow = Math.exp(-Math.pow((hx - 0.7) * 2.5, 2)) * bright;
+        imgData.data[x] = Math.min(255, imgData.data[x] + sunGlow);
+        imgData.data[x+1] = Math.min(255, imgData.data[x+1] + sunGlow * 0.85);
+        imgData.data[x+2] = Math.min(255, imgData.data[x+2] + sunGlow * 0.6);
+      }
+      ctx.putImageData(imgData, 0, y);
+    }
+  }
+  const envTex = new THREE.CanvasTexture(envCanvas);
+  envTex.mapping = THREE.EquirectangularReflectionMapping;
+  envTex.colorSpace = THREE.SRGBColorSpace;
+  scene.environment = envTex;
 
   camera = new THREE.PerspectiveCamera(55, window.innerWidth / window.innerHeight, 0.5, 8000);
   camera.position.set(0, 5.5, 17);
@@ -265,11 +305,13 @@ function setupScene() {
   creatureGroup = new THREE.Group();
   scene.add(creatureGroup);
 
-  // ── Lighting for marine-life models (boosted for WebGPU PBR visibility) ──
-  // glTF MeshStandardMaterial needs strong key + fill lights to not render black
-  sunLight = new THREE.DirectionalLight(0xffffff, 2.8);
+  // ── Lighting for marine-life models (WebGPU PBR needs strong + env) ──
+  // Three-light system: ambient (base fill) + hemi (sky/ground) + sun (key)
+  const ambientLight = new THREE.AmbientLight(0x8899aa, 0.5);
+  scene.add(ambientLight);
+  sunLight = new THREE.DirectionalLight(0xffeedd, 3.5);   // warm sun, strong
   scene.add(sunLight);
-  hemiLight = new THREE.HemisphereLight(0x9fc6ff, 0x05202a, 1.0);
+  hemiLight = new THREE.HemisphereLight(0x9fc6ff, 0x05202a, 1.2);
   scene.add(hemiLight);
 
   // post-processing: scene pass + TSL bloom
@@ -350,12 +392,12 @@ function applyTimeOfDay(t) {
     const hLen = Math.sqrt(sunHue.r * sunHue.r + sunHue.g * sunHue.g + sunHue.b * sunHue.b);
     if (hLen > 1e-6) { sunHue.r /= hLen; sunHue.g /= hLen; sunHue.b /= hLen; }
     sunLight.color.copy(sunHue);
-    sunLight.intensity = THREE.MathUtils.lerp(1.8, 2.8, w);  // was 1.0-1.9
+    sunLight.intensity = THREE.MathUtils.lerp(2.2, 3.5, w);  // stronger base
   }
   if (hemiLight) {
     hemiLight.color.copy(uHorizonColor.value);
     hemiLight.groundColor.copy(uDeepColor.value);
-    hemiLight.intensity = THREE.MathUtils.lerp(0.6, 1.2, w);  // was 0.35-0.7
+    hemiLight.intensity = THREE.MathUtils.lerp(0.8, 1.4, w);  // was 0.6-1.2
   }
 
   timeValueEl.textContent = timeLabel(t);
@@ -371,8 +413,8 @@ function applyTimeOfDay(t) {
 // Ratio ≈ 5:1 (previously 2:1 — shark was half the whale's size, wrong).
 const CREATURE_CFG = {
   whale: {
-    radius: 60, speed: 0.028, baseY: -0.8,
-    bobFreq: [0.37, 0.61], bobAmp: [0.35, 0.18],
+    radius: 60, speed: 0.028, baseY: -3.5,     // deeper — whale swims below surface
+    bobFreq: [0.37, 0.61], bobAmp: [0.25, 0.12], // gentler bob when submerged
     breach: true, targetLen: 18,
     breachPeriod: 16, breachRiseFrac: 0.30, breachPeakFrac: 0.12,
     breachHeight: 10.0, breachPitch: 0.65,
@@ -400,9 +442,9 @@ function applyCreatureMaterial(mesh, cfg) {
     mat.color.copy(cfg.color);
     mat.roughness = Math.min(Math.max(cfg.roughness, 0.01), 1.0);
     mat.metalness = Math.min(Math.max(cfg.metalness, 0.0), 1.0);
-    mat.emissive = cfg.color.clone().multiplyScalar(0.025);
+    mat.emissive = cfg.color.clone().multiplyScalar(0.06);   // visible base glow
     mat.emissiveIntensity = 1.0;
-    mat.envMapIntensity = 0.6;
+    mat.envMapIntensity = 1.2;    // stronger env reflection
     mat.needsUpdate = true;
   }
   if (Array.isArray(mesh.material)) return;
