@@ -558,14 +558,47 @@ function addCreature(gltf, cfg) {
   creatures.push(c);
 }
 
+// ── Boat model switcher ──
+const BOAT_MODELS = [
+  { path: './assets/sailboat.glb', name: 'Sailboat' },   // 58 KB — smallest
+  { path: './assets/sailship.glb',  name: 'Sailship' }    // 214 KB — second smallest
+];
+let currentBoatIndex = 0;
+let boatCreatureIndices = [];   // indices into creatures[] that are boats
+
 async function setupCreatures() {
   const loader = new GLTFLoader();
   try { addCreature(await loader.loadAsync('./assets/whale.glb'), { type:'whale', ...CREATURE_CFG.whale }); }
   catch (e) { console.error('[open-sea] whale failed:', e); }
   try { addCreature(await loader.loadAsync('./assets/shark.glb'), { type:'shark', ...CREATURE_CFG.shark }); }
   catch (e) { console.error('[open-sea] shark failed:', e); }
-  try { addCreature(await loader.loadAsync('./assets/boat.glb'), { type:'boat', ...BOAT_CFG }); }
-  catch (e) { console.error('[open-sea] boat failed:', e); }
+
+  // Load both boat models; only the current one is visible
+  for (let i = 0; i < BOAT_MODELS.length; i++) {
+    try {
+      const idxBefore = creatures.length;
+      await loader.loadAsync(BOAT_MODELS[i].path, (gltf) => {
+        addCreature(gltf, { type:'boat', ...BOAT_CFG });
+      });
+      boatCreatureIndices.push(idxBefore);
+      // Hide non-default boats
+      if (i !== currentBoatIndex) {
+        creatures[idxBefore].model.visible = false;
+      }
+    } catch (e) { console.error(`[open-sea] ${BOAT_MODELS[i].name} failed:`, e); }
+  }
+}
+
+function switchBoat() {
+  // Hide current, show next
+  const prevIdx = boatCreatureIndices[currentBoatIndex];
+  creatures[prevIdx].model.visible = false;
+  currentBoatIndex = (currentBoatIndex + 1) % BOAT_MODELS.length;
+  const nextIdx = boatCreatureIndices[currentBoatIndex];
+  creatures[nextIdx].model.visible = true;
+
+  // Update button label
+  boatButtonEl.textContent = BOAT_MODELS[currentBoatIndex].name;
 }
 
 // ── Per-frame creature update ──
@@ -658,6 +691,7 @@ const timeRangeEl = document.getElementById('time-range');
 const timeValueEl = document.getElementById('time-value');
 const driftButtonEl = document.getElementById('drift-button');
 const wildlifeButtonEl = document.getElementById('wildlife-button');
+const boatButtonEl = document.getElementById('boat-button');
 const fpsValueEl = document.getElementById('fps-value');
 
 function setupUI() {
@@ -682,6 +716,12 @@ function setupUI() {
     wildlifeButtonEl.classList.toggle('active', wildlifeVisible);
     wildlifeButtonEl.setAttribute('aria-pressed', String(wildlifeVisible));
   });
+
+  boatButtonEl.addEventListener('click', () => {
+    switchBoat();
+  });
+  // Set initial label
+  boatButtonEl.textContent = BOAT_MODELS[currentBoatIndex].name;
 }
 
 function showError(title, message) {
