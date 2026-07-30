@@ -443,6 +443,20 @@ const CREATURE_CFG = {
   }
 };
 
+// ── BOAT_CFG ──
+// Fishing vessel = Quaternius "Ship" (CC0; mirrored on Poly Pizza as GLB so it
+// drops in with no conversion). Rides ON the wave surface (baseY ≈ 0), tilts with
+// the wave slope so it floats naturally, and never tips onto its side.
+const BOAT_CFG = {
+  radius: 45, speed: 0.011, baseY: 0.6,        // floats at surface, slow patrol
+  bobFreq: [0.35, 0.62], bobAmp: [0.14, 0.08],
+  targetLen: 14,
+  keepMaterial: true,   // preserve boat's own PBR + texture (hull / sails)
+  keepUp: true,         // Y stays up; longest horizontal axis aligns to +Z
+  waveTilt: true, tiltGain: 1.6,  // pitch/roll follow wave slope → floats naturally
+  bankAngle: 0
+};
+
 // ── Material post-processing ──
 // glTF MeshStandardMaterial renders black in WebGPU when lights are weak or
 // material properties are extreme. We force sane PBR values + tiny emissive floor.
@@ -490,7 +504,8 @@ function addCreature(gltf, cfg) {
   const model = gltf.scene;
 
   // Apply materials to all meshes BEFORE scene graph manipulation
-  model.traverse((child) => { applyCreatureMaterial(child, cfg); });
+  // (boats keep their own PBR + texture via keepMaterial:true)
+  if (!cfg.keepMaterial) model.traverse((child) => { applyCreatureMaterial(child, cfg); });
 
   model.updateMatrixWorld(true);
   const box = new THREE.Box3().setFromObject(model);
@@ -500,9 +515,14 @@ function addCreature(gltf, cfg) {
   const s = cfg.targetLen / maxDim;
   model.scale.setScalar(s);
 
-  // Align longest body axis to root-group +Z ("forward")
-  if (size.x >= size.z && size.x >= size.y) model.rotation.y = -Math.PI / 2;
-  else if (size.y >= size.x && size.y >= size.z) model.rotation.x = Math.PI / 2;
+  // Align longest axis to root-group +Z ("forward").
+  // Boats use keepUp: keep Y up so a tall mast never tips the hull onto its side.
+  if (cfg.keepUp) {
+    if (size.x >= size.z) model.rotation.y = -Math.PI / 2;
+  } else {
+    if (size.x >= size.z && size.x >= size.y) model.rotation.y = -Math.PI / 2;
+    else if (size.y >= size.x && size.y >= size.z) model.rotation.x = Math.PI / 2;
+  }
 
   // Recenter AFTER rotation so the pivot aligns with the oriented bounding box
   model.updateMatrixWorld(true);
@@ -522,6 +542,8 @@ function addCreature(gltf, cfg) {
     breachHeight: cfg.breachHeight||0, breachPitch: cfg.breachPitch||0,
     finBreak: cfg.finBreak||false, finBreakAmp: cfg.finBreakAmp||0,
     finBreakPeriod: cfg.finBreakPeriod||0, bankAngle: cfg.bankAngle||0,
+    keepMaterial: cfg.keepMaterial||false, keepUp: cfg.keepUp||false,
+    waveTilt: cfg.waveTilt||false, tiltGain: cfg.tiltGain||0,
     angle: Math.random() * Math.PI * 2, phase: Math.random() * Math.PI * 2,
     mixer: null
   };
@@ -542,6 +564,8 @@ async function setupCreatures() {
   catch (e) { console.error('[open-sea] whale failed:', e); }
   try { addCreature(await loader.loadAsync('./assets/shark.glb'), { type:'shark', ...CREATURE_CFG.shark }); }
   catch (e) { console.error('[open-sea] shark failed:', e); }
+  try { addCreature(await loader.loadAsync('./assets/boat.glb'), { type:'boat', ...BOAT_CFG }); }
+  catch (e) { console.error('[open-sea] boat failed:', e); }
 }
 
 // ── Per-frame creature update ──
@@ -601,6 +625,15 @@ function updateCreatures(time, dt) {
 
     // Banking into turns (roll = Z-axis rotation)
     roll = Math.sin(time * 0.13 + c.phase * 2.0) * c.bankAngle;
+
+    // ── Boat: pitch/roll follow local wave slope → floats on the surface ──
+    if (c.waveTilt) {
+      const dx = 2.5, dz = 2.5;
+      const slopeX = (sampleWaveY(x + dx, z, time) - sampleWaveY(x - dx, z, time)) / (2 * dx);
+      const slopeZ = (sampleWaveY(x, z + dz, time) - sampleWaveY(x, z - dz, time)) / (2 * dz);
+      pitch += -slopeZ * c.tiltGain;   // nose up/down with the swell ahead
+      roll  += -slopeX * c.tiltGain;   // heel with the cross-swell
+    }
 
     // Apply transform
     c.root.position.set(x, y, z);
