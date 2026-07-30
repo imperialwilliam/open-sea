@@ -427,7 +427,7 @@ const CREATURE_CFG = {
   whale: {
     radius: 60, speed: 0.028, baseY: -3.5,     // deeper — whale swims below surface
     bobFreq: [0.37, 0.61], bobAmp: [0.25, 0.12], // gentler bob when submerged
-    breach: true, targetLen: 18,
+    breach: false, targetLen: 18,   // breach disabled — user wants natural swimming only
     breachPeriod: 16, breachRiseFrac: 0.30, breachPeakFrac: 0.12,
     breachHeight: 10.0, breachPitch: 0.65,
     color: new THREE.Color(0x1a252e), roughness: 0.78, metalness: 0.06,
