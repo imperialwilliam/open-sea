@@ -406,6 +406,18 @@ function applyTimeOfDay(t) {
 /* ===========================================================================
    MARINE LIFE — CC0 whale + shark with materials, realistic scale,
    wave-surface riding, smooth breach animation, and banking turns.
+
+   ASSET PROVENANCE (evaluated 2026-07-30):
+   Source: Quaternius "Animated Fish Bundle" (Poly Pizza mirror), Public Domain (CC0).
+   - whale.glb : model id JGFwp6xWgk — clip "Armature|Swim", 20-node rig
+   - shark.glb : model id 3LzFgI3GLO — clip "Armature|Swim", 20-node rig
+   Why chosen over alternatives:
+   - CC0 (no attribution, fully commercial) — beats Sketchfab CC-BY / CC-BY-NC
+   - GLB/glTF — directly loadable by the project's GLTFLoader
+   - Both species rigged + swimming animation — addresses "no reasonable physics"
+   - Consistent low-poly style matches the stylized WebGPU ocean
+   Rejected: Smithsonian scans (CC0 but 100s of MB, no rig, not game-ready);
+   DigitalLife3D (ultra-HD but non-commercial license); Kenney (no sea-mammal pack).
    =========================================================================== */
 
 // ── Species configs (real-world-inspired proportions & behaviour) ──
