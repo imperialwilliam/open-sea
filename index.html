@@ -188,7 +188,7 @@
     padding-top: 16px;
     border-top: 1px solid rgba(255, 255, 255, 0.07);
   }
-  .pills { display: flex; gap: 8px; }
+  .pills { display: flex; gap: 8px; flex-wrap: wrap; }
   .pill {
     font-family: 'Geist Mono', ui-monospace, monospace;
     font-size: 10px;
@@ -200,6 +200,7 @@
     background: transparent;
     color: rgba(255, 255, 255, 0.42);
     cursor: pointer;
+    white-space: nowrap;
     transition: background 0.2s ease, border-color 0.2s ease, color 0.2s ease, transform 0.1s ease;
   }
   .pill:hover { color: rgba(255, 255, 255, 0.7); }
@@ -344,7 +345,7 @@
           <div class="pills">
             <button id="drift-button" class="pill active" type="button" aria-pressed="true">Drift</button>
             <button id="wildlife-button" class="pill active" type="button" aria-pressed="true">Wildlife</button>
-            <button id="boat-button" class="pill active" type="button" aria-pressed="true">Boat</button>
+            <button id="boat-button" class="pill active" type="button" aria-pressed="true">Ⓐ</button>
           </div>
           <div class="fps"><span id="fps-value">––</span> FPS</div>
         </div>

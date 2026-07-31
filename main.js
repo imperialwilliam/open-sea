@@ -444,9 +444,8 @@ const CREATURE_CFG = {
 };
 
 // ── BOAT_CFG ──
-// Fishing vessel = Quaternius "Ship" (CC0; mirrored on Poly Pizza as GLB so it
-// drops in with no conversion). Rides ON the wave surface (baseY ≈ 0), tilts with
-// the wave slope so it floats naturally, and never tips onto its side.
+// Two Quaternius CC0 vessels (Poly Pizza GLB mirrors), toggle via "Ⓐ/Ⓑ" pill button.
+// Both ride ON the wave surface (baseY ≈ 0), tilt with wave slope, keep own PBR texture.
 const BOAT_CFG = {
   radius: 45, speed: 0.011, baseY: 0.6,        // floats at surface, slow patrol
   bobFreq: [0.35, 0.62], bobAmp: [0.14, 0.08],
@@ -506,6 +505,18 @@ function addCreature(gltf, cfg) {
   // Apply materials to all meshes BEFORE scene graph manipulation
   // (boats keep their own PBR + texture via keepMaterial:true)
   if (!cfg.keepMaterial) model.traverse((child) => { applyCreatureMaterial(child, cfg); });
+  else model.traverse((child) => {
+    // Boats keep original color/texture but still need emissive floor + env boost
+    if (!child.isMesh) return;
+    const mats = Array.isArray(child.material) ? child.material : [child.material];
+    for (const mat of mats) {
+      if (!mat) continue;
+      mat.emissive = new THREE.Color(0x1a252e).multiplyScalar(0.04);
+      mat.emissiveIntensity = 1.0;
+      mat.envMapIntensity = 0.8;
+      mat.needsUpdate = true;
+    }
+  });
 
   model.updateMatrixWorld(true);
   const box = new THREE.Box3().setFromObject(model);
@@ -531,7 +542,13 @@ function addCreature(gltf, cfg) {
 
   const root = new THREE.Group();
   root.add(model);
-  model.position.copy(center2).negate(); // recenter: place bbox center at root origin
+  // Recenter: for keepUp objects (boats), align bbox BOTTOM to origin so they float
+  // on the surface. For everything else, use bbox center.
+  if (cfg.keepUp) {
+    model.position.set(-center2.x, -box2.min.y, -center2.z);
+  } else {
+    model.position.copy(center2).negate();
+  }
   creatureGroup.add(root);
 
   const c = {
@@ -560,8 +577,8 @@ function addCreature(gltf, cfg) {
 
 // ── Boat model switcher ──
 const BOAT_MODELS = [
-  { path: './assets/sailboat.glb', name: 'Sailboat' },   // 58 KB — smallest
-  { path: './assets/sailship.glb',  name: 'Sailship' }    // 214 KB — second smallest
+  { path: './assets/sailboat.glb', name: 'Ⓐ' },   // 58 KB — small sailboat
+  { path: './assets/sailship.glb',  name: 'Ⓑ' }    // 214 KB — larger sailship
 ];
 let currentBoatIndex = 0;
 let boatCreatureIndices = [];   // indices into creatures[] that are boats
@@ -577,25 +594,27 @@ async function setupCreatures() {
   for (let i = 0; i < BOAT_MODELS.length; i++) {
     try {
       const idxBefore = creatures.length;
-      await loader.loadAsync(BOAT_MODELS[i].path, (gltf) => {
-        addCreature(gltf, { type:'boat', ...BOAT_CFG });
-      });
+      const gltf = await loader.loadAsync(BOAT_MODELS[i].path);
+      addCreature(gltf, { type:'boat', ...BOAT_CFG });
       boatCreatureIndices.push(idxBefore);
       // Hide non-default boats
       if (i !== currentBoatIndex) {
-        creatures[idxBefore].model.visible = false;
+        creatures[idxBefore].root.visible = false;   // hide root Group, not .model
       }
     } catch (e) { console.error(`[open-sea] ${BOAT_MODELS[i].name} failed:`, e); }
   }
 }
 
 function switchBoat() {
-  // Hide current, show next
+  // Guard: don't switch if boats haven't loaded yet or only one succeeded
+  if (boatCreatureIndices.length < 2) return;
+
+  // Hide current, show next (creatures store .root = Group, not .model)
   const prevIdx = boatCreatureIndices[currentBoatIndex];
-  creatures[prevIdx].model.visible = false;
-  currentBoatIndex = (currentBoatIndex + 1) % BOAT_MODELS.length;
+  if (creatures[prevIdx]) creatures[prevIdx].root.visible = false;
+  currentBoatIndex = (currentBoatIndex + 1) % boatCreatureIndices.length;
   const nextIdx = boatCreatureIndices[currentBoatIndex];
-  creatures[nextIdx].model.visible = true;
+  if (creatures[nextIdx]) creatures[nextIdx].root.visible = true;
 
   // Update button label
   boatButtonEl.textContent = BOAT_MODELS[currentBoatIndex].name;
