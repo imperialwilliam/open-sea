@@ -406,7 +406,7 @@ function applyTimeOfDay(t) {
 /* ===========================================================================
    MARINE LIFE — CC0 whale + shark with materials, realistic scale,
    wave-surface riding, smooth breach animation, and banking turns.
-   Plus two switchable boats: sailboat (Quaternius) + rowboat (Kenney).
+   Plus one switchable boat: sailboat (Quaternius CC0).
 
    ASSET PROVENANCE (evaluated 2026-07-30/31):
    Marine life — Quaternius "Animated Fish Bundle" (Poly Pizza mirror), Public Domain (CC0):
@@ -415,24 +415,18 @@ function applyTimeOfDay(t) {
 
    Boats:
    - sailboat.glb : Quaternius (Poly Pizza), CC0, 58 KB — single-mast sailboat
-   - rowboat.glb  : Kenney "Watercraft Pack" (GitHub mirror), CC0, 51 KB —
-     small wooden tow boat, NO sails/masts. Perfect as Ⓑ option.
-     Source: https://kenney.nl/assets/watercraft-kit
-     Why Kenney: Quaternius has no good sail-less small boat; Kenney's CC0
-     watercraft pack fills this gap with consistent low-poly style.
 
    Scale design (cinematic balance, not 1:1 real):
    Real world → Scene units → Visual ratio
-   Humpback 12-18m  → whale 10u    → 1.8× sailboat, 2.6× rowboat
+   Humpback 12-18m  → whale 10u    → ~1.8× sailboat
    Sailboat 5-7m    → sailboat 5.5u → reference vessel
-   Rowboat 3-5m     → rowboat 3.8u  → smallest, cozy fishing boat feel
-   Great White 4-6m  → shark 3.0u    → slightly smaller than boats
+   Great White 4-6m  → shark 3.0u    → slightly smaller than sailboat
    =========================================================================== */
 
 // ── Species configs (real-world-inspired proportions & behaviour) ──
-// Scale reference (scene units): rowboat≈3.8, sailboat≈5.5, shark≈3, whale≈10
-// Real world: humpback 12-18m | great white 4-6m | small sailboat 5-7m | rowboat 3-5m
-// Visual ratio: whale ≈ 1.8× sailboat ≈ 2.6× rowboat ≈ 3.3× shark
+// Scale reference (scene units): sailboat≈5.5, shark≈3, whale≈10
+// Real world: humpback 12-18m | great white 4-6m | small sailboat 5-7m
+// Visual ratio: whale ≈ 1.8× sailboat ≈ 1.8× shark
 const CREATURE_CFG = {
   whale: {
     radius: 50, speed: 0.024, baseY: -2.8,     // closer than before; swims below surface
@@ -453,13 +447,13 @@ const CREATURE_CFG = {
   }
 };
 
-// ── BOAT_CFG (defaults, overridden per-model from BOAT_MODELS) ──
-// Boats ride ON the wave surface (baseY ≈ 0), tilt with wave slope, keep own PBR texture.
-// Scale reference: sailboat Ⓐ = 5.5u (~6m), rowboat Ⓑ = 3.8u (~4m)
+// ── BOAT_CFG ──
+// Single Quaternius CC0 sailboat (Poly Pizza GLB mirror), toggle via "⛵" pill button.
+// Rides ON the wave surface (baseY ≈ 0), tilts with wave slope, keeps own PBR texture.
 const BOAT_CFG = {
   speed: 0.011, baseY: 0.55,        // floats at surface, slow patrol
   bobFreq: [0.35, 0.62], bobAmp: [0.14, 0.08],
-  targetLen: 5.5,                   // default (sailboat override in BOAT_MODELS)
+  targetLen: 5.5,                   // default for sailboat
   radius: 40,                        // patrol radius
   keepMaterial: true,   // preserve boat's own PBR + texture (hull / sails)
   keepUp: true,         // Y stays up; longest horizontal axis aligns to +Z
@@ -587,14 +581,10 @@ function addCreature(gltf, cfg) {
 }
 
 // ── Boat model switcher ──
-// Ⓐ Sailboat (Quaternius CC0, 58KB) — small sailboat with single mast
-// Ⓑ Rowboat  (Kenney CC0, 51KB)  — small wooden tow boat, NO sails
-const BOAT_MODELS = [
-  { path: './assets/sailboat.glb', name: 'Ⓐ', targetLen: 5.5, radius: 40 },
-  { path: './assets/rowboat.glb',  name: 'Ⓑ', targetLen: 3.8, radius: 35 }
-];
-let currentBoatIndex = 0;
-let boatCreatureIndices = [];   // indices into creatures[] that are boats
+// ── Boat model ──
+// Single Quaternius CC0 sailboat (Poly Pizza GLB mirror). Toggle via pill button.
+const BOAT_MODEL = { path: './assets/sailboat.glb', name: '⛵', targetLen: 5.5, radius: 40 };
+let boatCreatureIndex = -1;   // index into creatures[] for the boat (-1 = not loaded)
 
 async function setupCreatures() {
   const loader = new GLTFLoader();
@@ -603,37 +593,21 @@ async function setupCreatures() {
   try { addCreature(await loader.loadAsync('./assets/shark.glb'), { type:'shark', ...CREATURE_CFG.shark }); }
   catch (e) { console.error('[open-sea] shark failed:', e); }
 
-  // Load both boat models; only the current one is visible
-  // Each model uses its own targetLen/radius from BOAT_MODELS[] for correct scaling
-  for (let i = 0; i < BOAT_MODELS.length; i++) {
-    try {
-      const idxBefore = creatures.length;
-      const gltf = await loader.loadAsync(BOAT_MODELS[i].path);
-      const modelCfg = { type:'boat', ...BOAT_CFG,
-        targetLen: BOAT_MODELS[i].targetLen, radius: BOAT_MODELS[i].radius };
-      addCreature(gltf, modelCfg);
-      boatCreatureIndices.push(idxBefore);
-      // Hide non-default boats
-      if (i !== currentBoatIndex) {
-        creatures[idxBefore].root.visible = false;   // hide root Group, not .model
-      }
-    } catch (e) { console.error(`[open-sea] ${BOAT_MODELS[i].name} failed:`, e); }
-  }
+  // Load boat model
+  try {
+    boatCreatureIndex = creatures.length;
+    const gltf = await loader.loadAsync(BOAT_MODEL.path);
+    addCreature(gltf, { type:'boat', ...BOAT_CFG,
+      targetLen: BOAT_MODEL.targetLen, radius: BOAT_MODEL.radius });
+  } catch (e) { console.error('[open-sea] boat failed:', e); boatCreatureIndex = -1; }
 }
 
-function switchBoat() {
-  // Guard: don't switch if boats haven't loaded yet or only one succeeded
-  if (boatCreatureIndices.length < 2) return;
-
-  // Hide current, show next (creatures store .root = Group, not .model)
-  const prevIdx = boatCreatureIndices[currentBoatIndex];
-  if (creatures[prevIdx]) creatures[prevIdx].root.visible = false;
-  currentBoatIndex = (currentBoatIndex + 1) % boatCreatureIndices.length;
-  const nextIdx = boatCreatureIndices[currentBoatIndex];
-  if (creatures[nextIdx]) creatures[nextIdx].root.visible = true;
-
-  // Update button label
-  boatButtonEl.textContent = BOAT_MODELS[currentBoatIndex].name;
+function toggleBoat() {
+  if (boatCreatureIndex < 0 || !creatures[boatCreatureIndex]) return;
+  const c = creatures[boatCreatureIndex];
+  c.root.visible = !c.root.visible;
+  boatButtonEl.classList.toggle('active', c.root.visible);
+  boatButtonEl.setAttribute('aria-pressed', c.root.visible);
 }
 
 // ── Per-frame creature update ──
@@ -753,10 +727,10 @@ function setupUI() {
   });
 
   boatButtonEl.addEventListener('click', () => {
-    switchBoat();
+    toggleBoat();
   });
   // Set initial label
-  boatButtonEl.textContent = BOAT_MODELS[currentBoatIndex].name;
+  boatButtonEl.textContent = BOAT_MODEL.name;
 }
 
 function showError(title, message) {
