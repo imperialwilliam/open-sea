@@ -449,10 +449,10 @@ const CREATURE_CFG = {
 
 // ── BOAT_CFG ──
 // Single Quaternius CC0 sailboat (Poly Pizza GLB mirror), toggle via "⛵" pill button.
-// Hull sits partially submerged in the wave (baseY < 0), tilts with wave slope.
+// Hull bottom sits exactly at wave surface (baseY ≈ 0), tilts with wave slope.
 const BOAT_CFG = {
-  speed: 0.011, baseY: -0.4,         // hull bottom below wave surface → looks grounded
-  bobFreq: [0.35, 0.62], bobAmp: [0.06, 0.03],   // gentle bob, no flying
+  speed: 0.011, baseY: 0.1,          // hull bottom just at wave surface — no flying, no sinking
+  bobFreq: [0.35, 0.62], bobAmp: [0.05, 0.03],   // very gentle bob
   targetLen: 5.5,                   // default for sailboat
   radius: 40,                        // patrol radius
   keepMaterial: true,   // preserve boat's own PBR + texture (hull / sails)
