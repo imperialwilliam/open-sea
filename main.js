@@ -406,50 +406,61 @@ function applyTimeOfDay(t) {
 /* ===========================================================================
    MARINE LIFE — CC0 whale + shark with materials, realistic scale,
    wave-surface riding, smooth breach animation, and banking turns.
+   Plus two switchable boats: sailboat (Quaternius) + rowboat (Kenney).
 
-   ASSET PROVENANCE (evaluated 2026-07-30):
-   Source: Quaternius "Animated Fish Bundle" (Poly Pizza mirror), Public Domain (CC0).
-   - whale.glb : model id JGFwp6xWgk — clip "Armature|Swim", 20-node rig
+   ASSET PROVENANCE (evaluated 2026-07-30/31):
+   Marine life — Quaternius "Animated Fish Bundle" (Poly Pizza mirror), Public Domain (CC0):
+   - whale.glb : model id JGFwp6xWgK — clip "Armature|Swim", 20-node rig
    - shark.glb : model id 3LzFgI3GLO — clip "Armature|Swim", 20-node rig
-   Why chosen over alternatives:
-   - CC0 (no attribution, fully commercial) — beats Sketchfab CC-BY / CC-BY-NC
-   - GLB/glTF — directly loadable by the project's GLTFLoader
-   - Both species rigged + swimming animation — addresses "no reasonable physics"
-   - Consistent low-poly style matches the stylized WebGPU ocean
-   Rejected: Smithsonian scans (CC0 but 100s of MB, no rig, not game-ready);
-   DigitalLife3D (ultra-HD but non-commercial license); Kenney (no sea-mammal pack).
+
+   Boats:
+   - sailboat.glb : Quaternius (Poly Pizza), CC0, 58 KB — single-mast sailboat
+   - rowboat.glb  : Kenney "Watercraft Pack" (GitHub mirror), CC0, 51 KB —
+     small wooden tow boat, NO sails/masts. Perfect as Ⓑ option.
+     Source: https://kenney.nl/assets/watercraft-kit
+     Why Kenney: Quaternius has no good sail-less small boat; Kenney's CC0
+     watercraft pack fills this gap with consistent low-poly style.
+
+   Scale design (cinematic balance, not 1:1 real):
+   Real world → Scene units → Visual ratio
+   Humpback 12-18m  → whale 10u    → 1.8× sailboat, 2.6× rowboat
+   Sailboat 5-7m    → sailboat 5.5u → reference vessel
+   Rowboat 3-5m     → rowboat 3.8u  → smallest, cozy fishing boat feel
+   Great White 4-6m  → shark 3.0u    → slightly smaller than boats
    =========================================================================== */
 
 // ── Species configs (real-world-inspired proportions & behaviour) ──
-// Finback whale ~20m → targetLen 18 | Great white shark ~5m → targetLen 3.5
-// Ratio ≈ 5:1 (previously 2:1 — shark was half the whale's size, wrong).
+// Scale reference (scene units): rowboat≈3.8, sailboat≈5.5, shark≈3, whale≈10
+// Real world: humpback 12-18m | great white 4-6m | small sailboat 5-7m | rowboat 3-5m
+// Visual ratio: whale ≈ 1.8× sailboat ≈ 2.6× rowboat ≈ 3.3× shark
 const CREATURE_CFG = {
   whale: {
-    radius: 60, speed: 0.028, baseY: -3.5,     // deeper — whale swims below surface
-    bobFreq: [0.37, 0.61], bobAmp: [0.25, 0.12], // gentler bob when submerged
-    breach: false, targetLen: 18,   // breach disabled — user wants natural swimming only
+    radius: 50, speed: 0.024, baseY: -2.8,     // closer than before; swims below surface
+    bobFreq: [0.37, 0.61], bobAmp: [0.22, 0.10], // gentler bob when submerged
+    breach: false, targetLen: 10,   // was 18 — still biggest but not absurd
     breachPeriod: 16, breachRiseFrac: 0.30, breachPeakFrac: 0.12,
     breachHeight: 10.0, breachPitch: 0.65,
     color: new THREE.Color(0x1a252e), roughness: 0.78, metalness: 0.06,
     bankAngle: 0.08
   },
   shark: {
-    radius: 30, speed: 0.07, baseY: -1.4,
-    bobFreq: [0.55, 0.91], bobAmp: [0.18, 0.09],
-    breach: false, targetLen: 3.5,
+    radius: 25, speed: 0.065, baseY: -1.0,     // closer so it's visible (not a speck)
+    bobFreq: [0.55, 0.91], bobAmp: [0.16, 0.08],
+    breach: false, targetLen: 3.0,     // was 3.5 — slightly smaller than boats
     finBreak: true, finBreakAmp: 0.7, finBreakPeriod: 7,
     color: new THREE.Color(0x2e2e2e), roughness: 0.62, metalness: 0.10,
     bankAngle: 0.20
   }
 };
 
-// ── BOAT_CFG ──
-// Two Quaternius CC0 vessels (Poly Pizza GLB mirrors), toggle via "Ⓐ/Ⓑ" pill button.
-// Both ride ON the wave surface (baseY ≈ 0), tilt with wave slope, keep own PBR texture.
+// ── BOAT_CFG (defaults, overridden per-model from BOAT_MODELS) ──
+// Boats ride ON the wave surface (baseY ≈ 0), tilt with wave slope, keep own PBR texture.
+// Scale reference: sailboat Ⓐ = 5.5u (~6m), rowboat Ⓑ = 3.8u (~4m)
 const BOAT_CFG = {
-  radius: 45, speed: 0.011, baseY: 0.6,        // floats at surface, slow patrol
+  speed: 0.011, baseY: 0.55,        // floats at surface, slow patrol
   bobFreq: [0.35, 0.62], bobAmp: [0.14, 0.08],
-  targetLen: 14,
+  targetLen: 5.5,                   // default (sailboat override in BOAT_MODELS)
+  radius: 40,                        // patrol radius
   keepMaterial: true,   // preserve boat's own PBR + texture (hull / sails)
   keepUp: true,         // Y stays up; longest horizontal axis aligns to +Z
   waveTilt: true, tiltGain: 1.6,  // pitch/roll follow wave slope → floats naturally
@@ -576,9 +587,11 @@ function addCreature(gltf, cfg) {
 }
 
 // ── Boat model switcher ──
+// Ⓐ Sailboat (Quaternius CC0, 58KB) — small sailboat with single mast
+// Ⓑ Rowboat  (Kenney CC0, 51KB)  — small wooden tow boat, NO sails
 const BOAT_MODELS = [
-  { path: './assets/sailboat.glb', name: 'Ⓐ' },   // 58 KB — small sailboat
-  { path: './assets/sailship.glb',  name: 'Ⓑ' }    // 214 KB — larger sailship
+  { path: './assets/sailboat.glb', name: 'Ⓐ', targetLen: 5.5, radius: 40 },
+  { path: './assets/rowboat.glb',  name: 'Ⓑ', targetLen: 3.8, radius: 35 }
 ];
 let currentBoatIndex = 0;
 let boatCreatureIndices = [];   // indices into creatures[] that are boats
@@ -591,11 +604,14 @@ async function setupCreatures() {
   catch (e) { console.error('[open-sea] shark failed:', e); }
 
   // Load both boat models; only the current one is visible
+  // Each model uses its own targetLen/radius from BOAT_MODELS[] for correct scaling
   for (let i = 0; i < BOAT_MODELS.length; i++) {
     try {
       const idxBefore = creatures.length;
       const gltf = await loader.loadAsync(BOAT_MODELS[i].path);
-      addCreature(gltf, { type:'boat', ...BOAT_CFG });
+      const modelCfg = { type:'boat', ...BOAT_CFG,
+        targetLen: BOAT_MODELS[i].targetLen, radius: BOAT_MODELS[i].radius };
+      addCreature(gltf, modelCfg);
       boatCreatureIndices.push(idxBefore);
       // Hide non-default boats
       if (i !== currentBoatIndex) {
